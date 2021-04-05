@@ -1,0 +1,659 @@
+---
+title: "Tidymodel"
+output: 
+    html_document:
+      toc: true
+      toc_float: true
+---
+
+# Logistic model implementation using Tidymodels
+
+## Phases of analysis model creation
+Firstly, the general phases of creating a model are:
+**Exploratory data analysis (EDA)**: Initially there is a back and forth between numerical analysis and visualization of the data where different discoveries lead to more questions and data analysis “side-quests” to gain more understanding.
+ 
+
+**Feature engineering:** The understanding gained from EDA results in the creation of specific model terms that make it easier to accurately model the observed data. This can include complex methodologies or simpler features (using the ratio of two predictors). We will see more on feature engineering when we learn how tidymodels work.
+**Model tuning and selection:** A variety of models are generated and their performance is compared. Some models require parameter tuning where some structural parameters are required to be specified or optimized.
+**Model evaluation:** During this phase of model development, we assess the model’s performance metrics, examine residual plots, and conduct other EDA-like analyses to understand how well the models work. In some cases, formal between-model comparisons help you to understand whether any differences in models are within the experimental noise.
+After an initial sequence of these tasks, more understanding is gained regarding the database and which types of models are superior for this dataset. This leads to additional EDA and feature engineering, another round of modeling, and so on. Once the data analysis goals are achieved, the last steps are typically to finalize, document, and communicate the model. For predictive models, it is common at the end to validate the model on an additional set of data reserved for this specific purpose.
+##Introduction to tidymodels
+
+As the name suggests, the tidymodel package from RStudio helps us tidying up the data. However, the group of packages that make up tidymodels does not implement statistical models themselves. Instead, they focus on making all the tasks around fitting the model much easier. Those tasks are data pre-processing and results in validation.
+
+The tidymodels focuses on designing R packages and functions that can be easily understood and used by a broad range of people. So the naming of the functions is done in a way that is understandable and intuitive.
+
+R modeling functions from the core language or other R packages can be used in conjunction with the tidyverse, especially with the dplyr, purrr, and tidyr packages. 
+The basic functions of tidymodel are based on cooking processes; such as the function bake() refers to applying a trained data recipe, juice() refers to extracting finalized training set.
+
+
+We will learn how creating a model with tidymodels make our understanding of models easier and simpler.
+
+#Building the model
+Let’s use the data from “tidymodel/urchins.csv at main · mashiat0808/tidymodel (github.com)” to explore how three different feeding regimes affect the size of sea urchins over time. The initial size of the sea urchins at the beginning of the experiment probably affects how big they grow as they are fed.
+
+
+
+Now how to create a logistic regression from this dataset using tidymodels? We will see, step by step. 
+
+
+###The packages
+To use the codes in this article, we will need to install the following packages: broom.mixed, dotwhisker, readr, rstanarm, and tidymodels.
+
+```{r warning=FALSE} 
+library(tidymodels)  # for the parsnip package, along with the rest of tidymodels
+
+# Helper packages
+library(readr)       # for importing data
+library(broom.mixed) # for converting bayesian models to tidy tibbles
+library(dotwhisker)  # for visualizing regression results
+urchins <-  read_csv("https://tidymodels.org/start/models/urchins.csv") %>% 
+  setNames(c("food_regime", "initial_volume", "width")) %>% 
+  mutate(food_regime = factor(food_regime, levels = c("Initial", "Low", "High")))
+urchins
+```
+
+The urchins data is a tibble. For each of the 72 urchins, we know their:
+experimental feeding regime group (`food_regime`: either `Initial`, `Low`, or `High`),
+size in milliliters at the start of the experiment (`initial_volume`), and
+suture width at the end of the experiment (`width`).
+As the first step in modeling, it’s always a good idea to plot the data, so we can visualize the data better, so
+```{r warning=FALSE} 
+ggplot(urchins,    aes(x = initial_volume, 
+           y = width, 
+           group = food_regime, 
+           col = food_regime)) +  geom_point() +   geom_smooth(method = lm, se = FALSE) +
+  scale_color_viridis_d(option = "plasma", end = .7)
+```
+ 
+We can see that urchins that were larger in volume at the start of the experiment tended to have wider sutures at the end, but the slopes of the lines look different so this effect may depend on the feeding regime condition.
+##Build and fit a model
+A standard two-way analysis of variance (ANOVA) model makes sense for this dataset because we have both a continuous predictor and a categorical predictor. Since the slopes appear to be different for all of the feeding regimes, let’s build a model that allows for two-way interactions. Specifying an R formula with our variables in this way:
+```{r warning=FALSE} 
+width ~ initial_volume * food_regime
+```
+This allows our regression model to have separate slopes and intercepts for each food regime depending on initial volume.
+With tidymodels, we start by specifying the functional form of the model that we want. Since there is a numeric outcome and the model should be linear with slopes and intercepts, the model type is “linear regression”. We can declare this with:
+`linear_reg()`
+Now that the type of model has been specified, a method for fitting or training the model can be started using the engine. 
+The engine value is often a mash-up of the software that can be used to fit or train the model as well as the estimation method.
+For example, to use ordinary least squares, we can set the engine to be lm, and save the model object as lm_mod:
+ 
+```{r warning=FALSE} 
+lm_mod <- linear_reg() %>% 
+  set_engine("lm")
+```
+ 
+The can now estimate or train the model: 
+ 
+```{r warning=FALSE} 
+lm_fit <- 
+  lm_mod %>% 
+  fit(width ~ initial_volume * food_regime, data = urchins)
+lm_fit
+```
+We can view our model summary by using the tidy() function: 
+```{r warning=FALSE} 
+tidy(lm_fit)
+```
+##Use a model to predict
+This fitted object `lm_fit` has the `lm` model output built-in, which you can access with `lm_fit$fit`, but there are some benefits to using the fitted parsnip model object when it comes to predicting.
+Suppose that, it would be particularly interesting to make a plot of the mean body size for urchins that started the experiment with an initial volume of 20ml. To create a graph like that, we start with some new example data that we will make predictions for, to show in our graph:
+```{r warning=FALSE} 
+new_points <- expand.grid(initial_volume = 20, 
+                          food_regime = c("Initial", "Low", "High"))
+new_points
+```
+ 
+Now, to get our predicted results, we can use the `predict()` function to find the mean values at 20ml.
+It is also important to communicate the variability, so we also need to find the predicted confidence intervals. 
+But first, let’s generate the mean body width values:
+```{r warning=FALSE} 
+mean_pred <- predict(lm_fit, new_data = new_points)
+conf_int_pred <- predict(lm_fit, 
+                         new_data = new_points, 
+                         type = "conf_int")
+# Now combine: 
+plot_data <- 
+  new_points %>% 
+  bind_cols(mean_pred) %>% 
+  bind_cols(conf_int_pred)
+ 
+# and plot:
+ggplot(plot_data, aes(x = food_regime)) + 
+  geom_point(aes(y = .pred)) + 
+  geom_errorbar(aes(ymin = .pred_lower, 
+                    ymax = .pred_upper),
+                width = .2) + 
+  labs(y = "urchin size")
+```
+ 
+Note: The extra step of defining the model using a function like `linear_reg()` might seem superfluous since a call to `lm()`  is much more succinct. However, the problem with standard modeling functions is that they don’t separate what you want to do from the execution. For example, the process of executing a formula has to happen repeatedly across model calls even when the formula does not change; we can’t recycle those computations.
+And thus ends our journey with building the model.
+ 
+#Preprocessing data with recipe
+##Introduction
+Now, we will explore another tidymodels package, recipes, which is designed to help us preprocess our data *before* training our model. Recipes are built as a series of preprocessing steps, such as:
+ converting qualitative predictors to indicator variables (also known as dummy variables),
+ transforming data to be on a different scale (for example taking the logarithm of a variable),
+ transforming whole groups of predictors together,
+ extracting key features from raw variables (e.g., getting the day of the week out of a date variable),
+and so on. If we are familiar with R’s formula interface, a lot of this might sound familiar and like what a formula already does. Recipes can be used to do many of the same things, but they have a much wider range of possibilities. This article shows how to use recipes for modeling.
+To use code in this article, you will need to install the following packages: nycflights13, skimr, and tidymodels.
+```{r warning=FALSE} 
+library(tidymodels)      # for the recipes package, along with the rest of tidymodels
+# Helper packages
+library(nycflights13)    # for flight data
+library(skimr)           # for variable summaries
+```
+ 
+##The dataset
+Let’s use the data from nycflights13 library to predict whether a plane arrives more than 30 minutes late. This data set contains information on 325,819 flights departing near New York City in 2013. Let’s start by loading the data and making a few changes to the variables:
+```{r warning=FALSE} 
+set.seed(123)
+flight_data <- 
+  flights %>% 
+  mutate(
+    arr_delay = ifelse(arr_delay >= 30, "late", "on_time"),
+    arr_delay = factor(arr_delay),
+    date = as.Date(time_hour)
+  ) %>% 
+  inner_join(weather, by = c("origin", "time_hour")) %>% 
+  select(dep_time, flight, origin, dest, air_time, distance, 
+         carrier, date, arr_delay, time_hour) %>% 
+  na.omit() %>% 
+  mutate_if(is.character, as.factor)
+```
+We can see that about 16% of the flights in this data set arrived more than 30 minutes late.
+ 
+```{r warning=FALSE} 
+flight_data %>% 
+  count(arr_delay) %>% 
+  mutate(prop = n/sum(n))
+glimpse(flight_data)
+```
+Before we start building up our recipe, let’s take a quick look at a few specific variables that will be important for both preprocessing and modeling.
+First, notice that the variable we created called `arr_delay` is a factor variable; it is important that our outcome variable for training a logistic regression model is a factor.
+Second, there are two variables that we don’t want to use as predictors in our model, but that we would like to retain as identification variables that can be used to troubleshoot poorly predicted data points. These are `flight`, a numeric value, and `time_hour`, a date-time value.
+Third, there are 104 flight destinations contained in dest and 16 distinct `carrier`s.
+```{r warning=FALSE} 
+flight_data %>% 
+  skimr::skim(dest, carrier)
+```
+ 
+Because we’ll be using a simple logistic regression model, the variables `dest` and `carrier` will be converted to dummy variables. However, some of these values do not occur very frequently and this could complicate our analysis. We’ll discuss specific steps later to show what we can add to our recipe to address this issue before modeling.
+ 
+
+##Data Splitting
+To get started, let’s split this single dataset into two: a *training* set and a *testing * set. We’ll keep most of the rows in the original dataset (subset chosen randomly) in the *training* set. The training data will be used to *fit* the model, and the *testing* set will be used to measure model performance.
+To do this, we can use the rsample package to create an object that contains the information on *how* to split the data, and then two more rsample functions to create data frames for the training and testing sets:
+```{r warning=FALSE} 
+set.seed(555)
+data_split <- initial_split(flight_data, prop = 3/4)
+
+train_data <- training(data_split)
+test_data  <- testing(data_split)
+```
+##Creating Recipe and roles
+To get started, let’s create a recipe for a simple logistic regression model. Before training the model, we can use a recipe to create a few new predictors and conduct some preprocessing required by the model.
+```{r warning=FALSE} 
+flights_rec <- 
+  recipe(arr_delay ~ ., data = train_data)
+```
+ 
+The recipe() function as we used it here has two arguments:
+ A formula. Any variable on the left-hand side of the tilde (~) is considered the model outcome (here, `arr_delay`). On the right-hand side of the tilde are the predictors. Variables may be listed by name, or you can use the dot (.) to indicate all other variables as predictors.
+ The data. A recipe is associated with the data set used to create the model. This will typically be the *training* set, so `data = train_data` here.
+Now we can add roles to this recipe. We can use the update_role() function to let recipes know that `flight` and `time_hour` are variables with a custom role that we called `"ID"` (a role can have any character value). Whereas our formula included all variables in the training set other than `arr_delay` as predictors, this tells the recipe to keep these two variables but not use them as either outcomes or predictors.
+ 
+```{r warning=FALSE} 
+flights_rec <- 
+  recipe(arr_delay ~ ., data = train_data) %>% 
+  update_role(flight, time_hour, new_role = "ID")
+```
+This step of adding roles to a recipe is optional; the purpose of using it here is that those two variables can be retained in the data but not included in the model. This can be convenient when, after the model is fit, we want to investigate some poorly predicted value. These ID columns will be available and can be used to try to understand what went wrong.
+To get the current set of variables and roles, use the `summary()` function:
+```{r warning=FALSE} 
+summary(flights_rec)
+```
+ 
+##Create Features
+Now we can start adding steps to our recipe using the pipe operator. Perhaps it is reasonable for the date of the flight to have an effect on the likelihood of late arrival. A little bit of **feature engineering** might go a long way to improving our model. How should the date be encoded into the model? The date column has an R date object so including that column “as is” will mean that the model will convert it to a numeric format equal to the number of days after a reference date:
+ 
+```{r warning=FALSE} 
+flight_data %>% 
+  distinct(date) %>% 
+  mutate(numeric_date = as.numeric(date))
+```
+ 
+It’s possible that a numeric date variable is a good option for modeling; perhaps the model would benefit from a linear trend between the log-odds of late arrival and the numeric date variable. However, it might be better to add model terms derived from the date that has a better potential to be important to the model. For example, we could derive the following meaningful features from the single `date` variable:
+ the day of the week,
+ the month, and
+ whether or not the date corresponds to a holiday.
+Let’s do all three of these by adding steps to our recipe:
+```{r warning=FALSE} 
+flights_rec <- 
+  recipe(arr_delay ~ ., data = train_data) %>% 
+  update_role(flight, time_hour, new_role = "ID") %>% 
+  step_date(date, features = c("dow", "month")) %>%               
+  step_holiday(date, holidays = timeDate::listHolidays("US")) %>% 
+  step_rm(date)
+```
+ 
+What does each of these steps do?
+ With `step_date()`, we created two new factor columns with the appropriate day of the week and the month.
+ With `step_holiday()`, we created a binary variable indicating whether the current date is a holiday or not. The argument value of `timeDate::listHolidays("US")` uses the timeDate package to list the 17 standard US holidays.
+ With `step_rm()`, we remove the original date variable since we no longer want it in the model.
+Next, we’ll turn our attention to the variable types of our predictors. Because we plan to train a logistic regression model, we know that predictors will ultimately need to be numeric, as opposed to factor variables. 
+For factors like `dest` and `origin`, standard practice is to convert them into *dummy* or *indicator* variables to make them numeric. These are binary values for each level of the factor. For example, our `origin` variable has values of `"EWR"`, `"JFK"`, and `"LGA"`. The standard dummy variable encoding, shown below, will create two numeric columns of the data that are 1 when the originating airport is `"JFK"` or `"LGA"` and zero otherwise, respectively.
+But, unlike the standard model formula methods in R, a recipe **does not** automatically create these dummy variables for you; you’ll need to tell your recipe to add this step. This is for two reasons. First, many models do not require numeric predictors, so dummy variables may not always be preferred. Second, recipes can also be used for purposes outside of modeling, where non-dummy versions of the variables may work better. For example, you may want to make a table or a plot with a variable as a single factor. For those reasons, you need to explicitly tell recipes to create dummy variables using `step_dummy()`:
+```{r warning=FALSE} 
+flights_rec <- 
+  recipe(arr_delay ~ ., data = train_data) %>% 
+  update_role(flight, time_hour, new_role = "ID") %>% 
+  step_date(date, features = c("dow", "month")) %>% 
+  step_holiday(date, holidays = timeDate::listHolidays("US")) %>% 
+  step_rm(date) %>% 
+  step_dummy(all_nominal(), -all_outcomes())
+```
+Here, we did something different than before: instead of applying a step to an individual variable, we used selectors to apply this recipe step to several variables at once.
+ The first selector, `all_nominal()`, selects all variables that are either factors or characters.
+ The second selector, `-all_outcomes()` removes any outcome variables from this recipe step.
+With these two selectors together, our recipe step above translates to:
+*Create dummy variables for all of the factor or character columns unless they are outcomes.*
+At this stage in the recipe, this step selects the `origin, dest`, and `carrier` variables. It also includes two new variables, `date_dow`, and `date_month`, that were created by the earlier `step_date(`).
+More generally, the recipe selectors mean that you don’t always have to apply steps to individual variables one at a time. Since a recipe knows the *variable type* and *role* of each column, it can also be selected (or dropped) using this information.
+We need one final step to add to our recipe. Since `carrier` and `dest` have some infrequently occurring factor values, it is possible that dummy variables might be created for values that don’t exist in the training set. For example, there is one destination that is only in the test set:
+```{r warning=FALSE} 
+test_data %>% 
+  distinct(dest) %>% 
+  anti_join(train_data)
+```
+When the recipe is applied to the training set, a column is made for LEX because the factor levels come from `flight_data` (not the training set), but this column will contain all zeros. This is a “zero-variance predictor” that has no information within the column. While some R functions will not produce an error for such predictors, it usually causes warnings and other issues. `step_zv()` will remove columns from the data when the training set data have a single value, so it is added to the recipe *after*  `step_dummy()`:
+```{r warning=FALSE} 
+flights_rec <- 
+  recipe(arr_delay ~ ., data = train_data) %>% 
+  update_role(flight, time_hour, new_role = "ID") %>% 
+  step_date(date, features = c("dow", "month")) %>% 
+  step_holiday(date, holidays = timeDate::listHolidays("US")) %>% 
+  step_rm(date) %>% 
+  step_dummy(all_nominal(), -all_outcomes()) %>% 
+  step_zv(all_predictors())
+```
+Now we’ve created a *specification* of what should be done with the data. How do we use the recipe we made?
+ 
+##Fit a model with recipe
+Let’s use logistic regression to model the flight data.
+```{r warning=FALSE} 
+lr_mod <- 
+  logistic_reg() %>% 
+  set_engine("glm")
+```
+We will want to use our recipe across several steps as we train and test our model. We will:
+**Process the recipe using the training set**: This involves any estimation or calculations based on the training set. For our recipe, the training set will be used to determine which predictors should be converted to dummy variables and which predictors will have zero-variance in the training set, and should be slated for removal.
+**Apply the recipe to the training set**: We create the final predictor set on the training set.
+**Apply the recipe to the test set**: We create the final predictor set on the test set. Nothing is recomputed and no information from the test set is used here; the dummy variable and zero-variance results from the training set are applied to the test set.
+To simplify this process, we can use a *model workflow*, which pairs a model and recipe together. This is a straightforward approach because different recipes are often needed for different models, so when a model and recipe are bundled, it becomes easier to train and test *workflows*. We’ll use the workflows package from tidymodels to bundle our parsnip model (`lr_mod`) with our recipe (`flights_rec`).
+```{r warning=FALSE} 
+flights_wflow <- 
+  workflow() %>% 
+  add_model(lr_mod) %>% 
+  add_recipe(flights_rec)
+flights_wflow
+```
+Now, there is a single function that can be used to prepare the recipe and train the model from the resulting predictors:
+```{r warning=FALSE} 
+flights_fit <- 
+  flights_wflow %>% 
+  fit(data = train_data)
+```
+This object has the finalized recipe and fitted model objects inside. You may want to extract the model or recipe objects from the workflow. To do this, you can use the helper functions `pull_workflow_fit()` and `pull_workflow_prepped_recipe()`. For example, here we pull the fitted model object then use the` broom::tidy()` function to get a tidy tibble of model coefficients:
+```{r warning=FALSE} 
+flights_fit %>% 
+  pull_workflow_fit() %>% 
+  tidy()
+```
+##Use a trained workflow to predict
+Our goal was to predict whether a plane arrives more than 30 minutes late. We have just:
+Built the model (`lr_mod`),
+Created a preprocessing recipe (`flights_rec`),
+Bundled the model and recipe (`flights_wflow`), and
+Trained our workflow using a single call to `fit()`.
+The next step is to use the trained workflow (`flights_fit`) to predict with the unseen test data, which we will do with a single call to `predict()`. The `predict()` method applies the recipe to the new data, then passes them to the fitted model.
+ 
+```{r warning=FALSE} 
+predict(flights_fit, test_data)
+```
+ 
+Because our outcome variable here is a factor, the output from `predict()` returns the predicted class: `late` versus `on_time`. But, let’s say we want the predicted class probabilities for each flight instead. To return those, we can specify `type = "prob"` when we use `predict()`. We’ll also bind the output with some variables from the test data and save them together:
+```{r warning=FALSE} 
+flights_pred <- 
+  predict(flights_fit, test_data, type = "prob") %>% 
+  bind_cols(test_data %>% select(arr_delay, time_hour, flight)) 
+flights_pred
+```
+Now that we have a tibble with our predicted class probabilities, how will we evaluate the performance of our workflow? We can see from these first few rows that our model predicted these 5 on-time flights correctly because the values of `.pred_on_time` are p > .50. But we also know that we have 81,454 rows total to predict. We would like to calculate a metric that tells how well our model predicted late arrivals, compared to the true status of our outcome variable, `arr_delay`.
+Let’s use the area under the ROC curve as our metric, computed using `roc_curve(`) and `roc_auc()` from the yardstick package.
+To generate a ROC curve, we need the predicted class probabilities for late and `on_time`, which we just calculated in the code chunk above. We can create the ROC curve with these values, using `roc_curve()` and then piping to the `autoplot()` method:
+```{r warning=FALSE} 
+flights_pred %>% 
+  roc_curve(truth = arr_delay, .pred_late) %>% 
+  autoplot()
+```
+Similarly, `roc_auc()` estimates the area under the curve:
+```{r warning=FALSE} 
+flights_pred %>% 
+  roc_auc(truth = arr_delay, .pred_late)
+```
+So we learn how to preprocess data and create recipes by ourselves. We also learn how to create workflows.
+ 
+ 
+#Tuning Model Parameters
+Some model parameters cannot be learned directly from a data set during model training; these kinds of parameters are called hyperparameters. Some examples of hyperparameters include the number of predictors that are sampled at splits in a tree-based model (we call this `mtry` in tidymodels) or the learning rate in a boosted tree model (we call this `learn_rate`). Instead of learning these kinds of hyperparameters during model training, we can estimate the best values for these values by training many models on resampled data sets and exploring how well all these models perform. This process is called tuning.
+To use code in this article, you will need to install the following packages: modeldata, rpart, tidymodels, and vip.
+ 
+```{r warning=FALSE} 
+library(tidymodels) # for the rsample package, along with the rest of tidymodels
+# Helper packages
+library(modeldata)  # for the cells data
+library(vip)         # for variable importance plots
+```
+###The dataset
+We are introducing a data set of images of cells that were labeled by experts as well-segmented (WS) or poorly segmented (PS). 
+```{r warning=FALSE} 
+data(cells, package = "modeldata")
+cells
+```
+###Making Image segmentation better
+Random forest models are a tree-based ensemble method and typically perform well with default hyperparameters. However, the accuracy of some other tree-based models, such as boosted tree models or decision tree models, can be sensitive to the values of hyperparameters. In this article, we will train a **decision tree** model. There are several hyperparameters for decision tree models that can be tuned for better performance. Let’s explore:
+the complexity parameter (which we call `cost_complexity` in tidymodels) for the tree, and
+the maximum `tree_depth`.
+Tuning these hyperparameters can improve model performance because decision tree models are prone to overfitting. We will tune the model hyperparameters to avoid overfitting. Tuning the value of `cost_complexity` helps by pruning back our tree. However, a high cost increases the number of tree nodes pruned and can result in the opposite problem—an underfit tree. Tuning `tree_depth`, on the other hand, helps by stopping our tree from growing after it reaches a certain depth. We want to tune these hyperparameters to find what those two values should be for our model to do the best job predicting image segmentation.
+Before we start the tuning process, we split our data into training and testing sets. We can use `strata = class` if we want our training and testing sets to be created using stratified sampling so that both have the same proportion of both kinds of segmentation.
+```{r warning=FALSE} 
+set.seed(123)
+cell_split <- initial_split(cells %>% select(-case), 
+                            strata = class)
+cell_train <- training(cell_split)
+cell_test  <- testing(cell_split)
+```
+We use the training data for tuning the model.
+###TUNING HYPERPARAMETERS
+Let’s start with the parsnip package, using a `decision_tree()` model with the rpart engine. To tune the decision tree hyperparameters `cost_complexity` and `tree_depth`, we create a model specification that identifies which hyperparameters we plan to tune.
+```{r warning=FALSE} 
+tune_spec <- 
+  decision_tree(
+    cost_complexity = tune(),
+    tree_depth = tune()
+  ) %>% 
+  set_engine("rpart") %>% 
+  set_mode("classification")
+tune_spec
+```
+ 
+Think of `tune()` here as a placeholder. After the tuning process, we will select a single numeric value for each of these hyperparameters. For now, we specify our parsnip model object and identify the hyperparameters we will `tune()`.
+We can’t train this specification on a single data set (such as the entire training set) and learn what the hyperparameter values should be, but we can train many models using resampled data and see which models turn out best. We can create a regular grid of values to try using some convenience functions for each hyperparameter:
+```{r warning=FALSE} 
+tree_grid <- grid_regular(cost_complexity(),
+                          tree_depth(),
+                          levels = 5)
+tree_grid
+```
+The function `grid_regular()` is from the dials package. It chooses sensible values to try for each hyperparameter; here, we asked for 5 of each. Since we have two to tune, `grid_regular()` returns 5x 5 = 25 different possible tuning combinations to try in a tidy tibble format.
+ 
+Here, you can see all 5 values of `cost_complexity` ranging up to 0.1. These values get repeated for each of the 5 values of `tree_depth`:
+```{r warning=FALSE} 
+tree_grid %>% 
+  count(tree_depth)
+```
+Armed with our grid filled with 25 candidate decision tree models, let’s create cross-validation folds for tuning:
+```{r warning=FALSE} 
+set.seed(234)
+cell_folds <- vfold_cv(cell_train)
+```
+Tuning in tidymodels requires a resampled object created with the rsample package.
+###Model Tuning with a grid
+We are ready to tune! Let’s use `tune_grid()` to fit models at all the different values we chose for each tuned hyperparameter. There are several options for building the object for tuning:
+ Tune a model specification along with a recipe or model, or
+ Tune a `workflow()` that bundles together a model specification and a recipe or model preprocessor.
+Here we use a `workflow()` with a straightforward formula; if this model required more involved data preprocessing, we could use `add_recipe()` instead of `add_formula()`.
+```{r warning=FALSE} 
+set.seed(345)
+tree_wf <- workflow() %>%
+  add_model(tune_spec) %>%
+  add_formula(class ~ .)
+ 
+tree_res <- 
+  tree_wf %>% 
+  tune_grid(
+    resamples = cell_folds,
+    grid = tree_grid
+    )
+ 
+tree_res
+```
+Once we have our tuning results, we can both explore them through visualization and then select the best result. The function `collect_metrics()` gives us a tidy tibble with all the results. We had 25 candidate models and two metrics, `accuracy` and `roc_auc`, and we get a row for each `.metric` and model.
+```{r warning=FALSE} 
+tree_res %>% 
+  collect_metrics()
+```
+The `show_best()` function shows us the top 5 candidate models by default:
+```{r warning=FALSE} 
+tree_res %>%
+  show_best("roc_auc")
+```
+ 
+We can also use the `select_best()` function to pull out the single set of hyperparameter values for our best decision tree model:
+```{r warning=FALSE} 
+best_tree <- tree_res %>%
+  select_best("roc_auc")
+best_tree
+```
+ 
+These are the values for `tree_depth` and `cost_complexity` that maximize AUC in this data set of cell images.
+###Finalizing our model
+We can update (or “finalize”) our workflow object `tree_wf` with the values from `select_best()`.
+```{r warning=FALSE} 
+final_wf <- 
+  tree_wf %>% 
+  finalize_workflow(best_tree)
+final_wf
+```
+Our tuning is done!!
+
+#A case study
+Now that we know how tidymodels work and function, we can create a complete model using our knowledge
+
+Firstly we will need to load some packages 
+
+```{r warning=FALSE} 
+
+library(tidymodels)  
+
+# Helper packages
+library(readr)       # for importing data
+library(vip)         # for variable importance plots
+library(glmnet)
+library(ranger)
+
+```
+
+
+The dataset we will be using is uploaded on https://github.com/mashiat0808/tidymodel/blob/main/hotels.csv. You can download the data from here. 
+
+Let’s load our data into RStudio and take a peek at what the data represents. 
+
+```{r warning=FALSE} 
+
+hotels <- 
+   read.csv(file.choose()) %>%
+  mutate_if(is.character, as.factor) 
+
+
+glimpse(hotels)
+
+```
+
+
+We will build a logistic regression model to predict which hotel stays included children, and which did not. Our outcome variable children is a factor variable with two levels: with or without.
+
+```{r warning=FALSE} 
+
+hotels %>% 
+  count(children) %>% 
+  mutate(prop = n/sum(n))
+
+```
+
+Initially, we can see that children were only in 8.1% of the reservations. 
+
+##Data splitting and resampling 
+
+Let’s reserve 25% of the hotel stays to the test set. As we know our outcome variable children is pretty imbalanced so we’ll use a stratified random sample:
+
+```{r warning=FALSE} 
+set.seed(123)
+splits      <- initial_split(hotels, strata = children)
+
+hotel_other <- training(splits)
+hotel_test  <- testing(splits)
+
+# training set proportions by children
+hotel_other %>% 
+  count(children) %>% 
+  mutate(prop = n/sum(n))
+
+# test set proportions by children
+hotel_test  %>% 
+  count(children) %>% 
+  mutate(prop = n/sum(n))
+```
+
+For this model, we will create a single resample called a validation set. In tidymodels, a validation set is treated as a single iteration of resampling. This will be a split from the 37,500 stays from hotel_other; which were not used for testing. This split creates two new datasets:
+
+1. the set held out for the purpose of measuring performance, called the validation set
+2. the remaining data used to fit the model, called the training set.
+
+
+We’ll allocate 20% of the hotel_other stays to the validation set, so our model performance metrics will be computed on a single set of 7,500 hotel stays. This amount of data should provide enough precision to be a reliable indicator.
+
+```{r warning=FALSE} 
+set.seed(234)
+vali_set <- validation_split(hotel_other, 
+                            strata = children, 
+                            prop = 0.80)
+vali_set
+```
+
+
+#Logistic Regression model
+
+###Building The model
+Since our outcome variable children is categorical, logistic regression is a good first model to work with. 
+We will use a model that can perform feature selection during training. The glmnet R package estimates the logistic regression slope parameters using a penalty on the process so that less relevant predictors are driven towards a value of zero. 
+
+We are using  the parsnip package with the glmnet engine:
+```{r warning=FALSE} 
+lr_model <- 
+  logistic_reg(penalty = tune(), mixture = 1) %>% 
+  set_engine("glmnet")
+```
+
+We set the penalty argument to tune() as a placeholder for now. This is a model parameter that we will tune to find the best value for making predictions with our data. The setting mixture to a value of one means that the glmnet model will potentially remove irrelevant predictors and choose a simpler model.
+
+###Creating the recipe
+We will create a recipe to define the preprocessing steps we need to prepare our hotel stays data for this model. We will use a number of useful recipe steps for creating features from dates:
+
+1. step_date() creates predictors for the year, month, and day of the week.
+2. step_holiday() generates a set of indicator variables for specific holidays. 
+3.step_rm() removes variables; here we’ll use it to remove the original date variable since we no longer want it in the model.
+
+4. step_dummy() converts characters or factors (i.e., nominal variables) into one or more numeric binary model terms for the levels of the original data.
+
+5. step_zv() removes indicator variables that only contain a single unique value (e.g. all zeros). This is important because, for penalized models, the predictors should be centered and scaled.
+
+6. step_normalize() centers and scales numeric variables.
+
+The recipe:
+```{r warning=FALSE} 
+holidays <- c("AllSouls", "AshWednesday", "ChristmasEve", "Easter", 
+              "ChristmasDay", "GoodFriday", "NewYearsDay", "PalmSunday")
+
+lr_recipe <- 
+  recipe(children ~ ., data = hotel_other) %>% 
+  step_date(arrival_date) %>% 
+  step_holiday(arrival_date, holidays = holidays) %>% 
+  step_rm(arrival_date) %>% 
+  step_dummy(all_nominal(), -all_outcomes()) %>% 
+  step_zv(all_predictors()) %>% 
+  step_normalize(all_predictors())
+```
+
+
+###Creating the workflow
+
+We will bundle the model and recipe into a single workflow() object to make management of the R objects easier:
+
+```{r warning=FALSE} 
+lr_workflow <- 
+  workflow() %>% 
+  add_model(lr_model) %>% 
+  add_recipe(lr_recipe)
+```
+
+###Creating Grid for tuning
+
+Before we fit this model, we need to set up a grid of penalty values to tune. 
+```{r warning=FALSE} 
+lr_reg_grid <- tibble(penalty = 10^seq(-4, -1, length.out = 30))
+
+```
+
+
+###Train and tune the model
+
+We will use tune::tune_grid() to train these penalized logistic regression models. We’ll also save the validation set predictions so that diagnostic information can be available after the model fit. The area under the ROC curve will be used to quantify how well the model performs across a continuum of event thresholds.
+
+```{r warning=FALSE} 
+lr_res <- 
+  lr_workflow %>% 
+  tune_grid(vali_set,
+            grid = lr_reg_grid,
+            control = control_grid(save_pred = TRUE),
+            metrics = metric_set(roc_auc))
+
+lr_plot <- 
+  lr_res %>% 
+  collect_metrics() %>% 
+  ggplot(aes(x = penalty, y = mean)) + 
+  geom_point() + 
+  geom_line() + 
+  ylab("Area under the ROC Curve") +
+  scale_x_log10(labels = scales::label_number())
+
+lr_plot 
+```
+
+This plot shows us that model performance is generally better at the smaller penalty values, which means that the majority of the predictors are important to the model. 
+
+Our model performance seems to plateau at the smaller penalty values, so going by the roc_auc metric alone could lead us to multiple options for the “best” value for this model:
+
+```{r warning=FALSE} 
+
+lr_best <- 
+  lr_res %>% 
+  collect_metrics() %>% 
+  arrange(penalty) %>% 
+  slice(12)
+lr_best
+
+lr_auc <- 
+  lr_res %>% 
+  collect_predictions(parameters = lr_best) %>% 
+  roc_curve(children, .pred_children) %>% 
+  mutate(model = "Logistic Regression")
+
+autoplot(lr_auc)
+```
+
+Ta da! There we have it. Our logistic regression model with tidymodel. 
