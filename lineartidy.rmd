@@ -1,0 +1,318 @@
+---
+title: "Tidymodel"
+output: 
+    html_document:
+      toc: true
+      toc_float: true
+---
+
+# Logistic model implementation using Tidymodels
+
+##1.1 Phases of analysis model creation
+Firstly, the general phases of creating a model are:
+**Exploratory data analysis (EDA)**: Initially there is a back and forth between numerical analysis and visualization of the data where different discoveries lead to more questions and data analysis “side-quests” to gain more understanding.
+
+![MarineGEO circle logo](/Users/mashi/Downloads/tidyr.PNG "Tidymodel")
+
+
+
+**Feature engineering:** The understanding gained from EDA results in the creation of specific model terms that make it easier to accurately model the observed data. This can include complex methodologies or simpler features (using the ratio of two predictors). We will see more on feature engineering when we learn how tidymodels work.
+**Model tuning and selection:** A variety of models are generated and their performance is compared. Some models require parameter tuning where some structural parameters are required to be specified or optimized.
+**Model evaluation:** During this phase of model development, we assess the model’s performance metrics, examine residual plots, and conduct other EDA-like analyses to understand how well the models work. In some cases, formal between-model comparisons help you to understand whether any differences in models are within the experimental noise.
+After an initial sequence of these tasks, more understanding is gained regarding the database and which types of models are superior for this dataset. This leads to additional EDA and feature engineering, another round of modeling, and so on. Once the data analysis goals are achieved, the last steps are typically to finalize, document, and communicate the model. For predictive models, it is common at the end to validate the model on an additional set of data reserved for this specific purpose.
+
+
+## 1.2 Introduction to tidymodels
+
+As the name suggests, the tidymodel package from RStudio helps us tidying up the data. However, the group of packages that make up tidymodels does not implement statistical models themselves. Instead, they focus on making all the tasks around fitting the model much easier. Those tasks are data pre-processing and results in validation.
+
+The tidymodels focuses on designing R packages and functions that can be easily understood and used by a broad range of people. So the naming of the functions is done in a way that is understandable and intuitive.
+
+R modeling functions from the core language or other R packages can be used in conjunction with the tidyverse, especially with the `dplyr`, `purrr`, and `tidyr` packages. 
+The basic functions of tidymodel are based on cooking processes; such as the function `bake()` refers to applying a trained data recipe, `juice()` refers to extracting finalized training set.
+
+
+We will learn how creating a model with tidymodels make our understanding of models easier and simpler.
+
+## 1.3 The dataset
+*The dataset we will be working with is available in the package “modeldata”. The Ames housing data set contains data on 2,930 properties in Ames, Iowa, including columns related to
++house characteristics (bedrooms, garage, fireplace, pool, porch, etc.),
++location (neighborhood),
++lot information (zoning, shape, size, etc.),
++ratings of condition and quality, and
++sale price.
+```{r warning=FALSE} 
+library(modeldata)# This is also loaded by the tidymodels package
+library(dplyr)
+library(rsample)
+library(recipes)
+library(tidymodels) # Includes the recipes package
+library(tidyverse)
+library(yardstick)
+
+
+
+data(ames)
+
+
+dim(ames)
+```
+
+We will use the transformed outcome for a better linear regression model.
+```{r warning=FALSE} 
+ames <- ames %>% mutate(Sale_Price = log10(Sale_Price))
+```
+## 1.4 Splitting the dataset
+
+The amount of data that should be allocated when splitting the data is highly dependent on the context of the problem at hand. Too much data in the training set lowers the quality of the performance estimates. Conversely, too much data in the test set handicaps the model’s ability to find appropriate parameter estimates. There are parts of the statistics community that eschew test sets in general because they believe all of the data should be used for parameter estimation. While there is merit to this argument, it is good modeling practice to have an unbiased set of observations as the final arbiter of model quality. A test set should be avoided only when the data are pathologically small.
+
+Suppose we allocate 80% of the data to the training set and the remaining 20% for testing. The worry here is that the more expensive houses would not be represented in the training set well with simple splitting; this would increase the risk that our model would be ineffective at predicting the price for such properties.
+
+A stratified random sample would conduct the 80/20 split within each of these data subsets and then pool the results together. In rsample, this is achieved using the strata argument:
+
+```{r warning=FALSE} 
+set.seed(123)
+ames_split <- initial_split(ames, prop = 0.80, strata = Sale_Price)
+ames_train <- training(ames_split)
+ames_test  <-  testing(ames_split)
+```
+
+## 1.5 Feature Engineering with Recipes
+Feature engineering encompasses activities that reformat predictor values to make them easier for a model to use effectively. This includes transformations and encodings of the data to best represent their important characteristics.
+
+* There are many other examples of preprocessing to build better features for modeling:
++Correlation between predictors can be reduced via feature extraction or the removal of some predictors.
++When some predictors have missing values, they can be imputed using a sub-model.
++Models that use variance-type measures may benefit from coercing the distribution of some skewed predictors to be symmetric by estimating a transformation.
+We introduce the `recipes` package which can be used to combine different feature engineering and preprocessing tasks into a single object and then apply these transformations to different data sets.
+### 1.5.1 A simple recipe for the ames housing data
+ 
+* In this section, we will focus on a small subset of the predictors available in the Ames housing data:
++The neighborhood (qualitative, with 29 neighborhoods in the training set)
++The general living area (continuous, named `Gr_Liv_Area`)
++The year built (`Year_Built`)
++The type of building (`Bldg_Type` with values `OneFam` (n=1,945),` TwoFmCon` (n=51), `Duplex` (n=83), `Twnhs` (n=79), and `TwnhsE` (n=188))
+Suppose that an initial ordinary linear regression model were fit to these data. the sale prices were pre-logged,so a standard call to `lm()` might look like:
+`lm(Sale_Price ~ Neighborhood + log10(Gr_Liv_Area) + Year_Built + Bldg_Type, data = ames)`
+* What the formula above does can be decomposed into a series of steps:
++Sale price is defined as the outcome while neighborhood, general living area, the year built, and building type variables are all defined as predictors.
++A log transformation is applied to the general living area predictor.
++The neighborhood and building type columns are converted from a non-numeric format to a numeric format (since least squares requires numeric predictors).
+The formula method will apply these data manipulations to any data, including new data, that are passed to the `predict()` function.
+ 
+A recipe is also an object that defines a series of steps for data processing. the recipe defines the steps without immediately executing them; it is only a specification of what *should* be done.
+```{r warning=FALSE} 
+
+simple_ames <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type,
+         data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_dummy(all_nominal_predictors())
+simple_ames
+```
+
+* Let’s break this down:
++The call to `recipe()` with a formula tells the recipe the roles of the variables (e.g., predictor, outcome). It only uses the data to determine the data types for the columns.
++`step_log()` declares that `Gr_Liv_Area` should be log transformed.
++`step_dummy()` is used to specify which variables should be converted from a qualitative format to a quantitative format, in this case, using dummy or indicator variables. An indicator or dummy variable is a binary numeric variable (a column of ones and zeroes) that encodes qualitative information
+The function `all_nominal_predictors()` captures the names of any predictor columns that are currently factor or character (i.e., nominal) in nature. This is a dplyr selector function similar to `starts_with()` or` matches()` but can only be used inside of a recipe.
+
+* What is the advantage to using a recipe? There are a few, including:
++These computations can be recycled across models since they are not tightly coupled to the modeling function.
++A recipe enables a broader set of data processing choices than formulas can offer.
++The syntax can be very compact. For example, `all_nominal()` can be used to capture many variables for specific types of processing while a formula would require each to be explicitly listed.
++All data processing can be captured in a single R object instead of in scripts that are repeated, or even spread across different files.
+ 
+## 1.5.2 Using Recipes
+When invoking the `recipe()` function, the steps are not estimated or executed in any way. The second phase for using a recipe is to estimate any quantities required by the steps using the `prep()` function. For example, we can use `step_normalize()`  to center and scale any predictors selected in the step. When we call `prep(recipe, training)`, this function estimates the required means and standard deviations from the data in the `training` argument. The transformations specified by each step are also sequentially executed on the data set. Again using normalization as the example, the means and variances are estimated and then used to standardize the columns.
+ 
+For our example recipe, we can now `prep()`:
+```{r warning=FALSE} 
+
+simple_ames <- prep(simple_ames, training = ames_train)
+Simple_ames
+```
+
+Note that, after preparing the recipe, the print statement shows the results of the selectors (e.g., `Neighborhood and Bldg_Type` are listed instead of `all_nominal`).
+One important argument to `prep()` is `retain`. When `retain = TRUE` (the default), the prepared version of the training set is kept within the recipe. This data set has been pre-processed using all of the steps listed in the recipe. Since `prep()` has to execute the recipe as it proceeds, it may be advantageous to keep this version of the training set so that, if that data set is to be used later, redundant calculations can be avoided. However, if the training set is big, it may be problematic to keep such a large amount of data in memory. Use `retain = FALSE` to avoid this.
+The third phase of recipe usage is to apply the preprocessing operations to a data set using the `bake()` function. The `bake()` function can apply the recipe to *any* data set. To use the test set, the syntax would be:
+```{r warning=FALSE}  
+test_ex <- bake(simple_ames, new_data = ames_test)
+names(test_ex) %>% head()
+```
+
+Note the dummy variable columns starting with `Neighborhood_`. The `bake()` function can also take selectors so that, if we only wanted the neighborhood results, we could use:
+
+`bake(simple_ames, ames_test, starts_with("Neighborhood_"))`
+
+To get the processed version of the training set, we could use `bake()` and pass in the argument `ames_train` but, as previously mentioned, this would repeat calculations that have already been executed. Instead, we can use `new_data = NULL` to quickly return the training set (if `retain = TRUE` was used). It accesses the data component of the prepared recipe.
+```{r warning=FALSE}  
+bake(simple_ames, new_data = NULL) %>% nrow()
+ames_train %>% nrow()
+```
+
+## 1.5.3 Encoding Qualitative data in numeric form/ Categorical Encoding Procedure
+
+One of the most common feature engineering tasks is transforming nominal or qualitative data (factors or characters) so that they can be encoded or represented numerically. Sometimes we can alter the factor levels of a qualitative column in helpful ways prior to such a transformation. For example, `step_unknown()` can be used to change missing values to a dedicated factor level. Similarly, if we anticipate that a new factor level may be encountered in future data, `step_novel()` can allot a new level for this purpose.
+Additionally, `step_other()` can be used to analyze the frequencies of the factor levels in the training set and convert infrequently occurring values to a catch-all level of “other”, with a specific threshold that can be specified. A good example is the `Neighborhood` predictor in our data:
+```{r warning=FALSE}  
+ggplot(ames_train, aes(y = Neighborhood)) + 
+  geom_bar() + 
+  labs(y = NULL)
+```
+
+Here there are two neighborhoods that have less than five properties in the training data; in this case, no houses at all in the Landmark neighborhood were included in the training set. For some models, it may be problematic to have dummy variables with a single non-zero entry in the column. At a minimum, it is highly improbable that these features would be important to a model. If we add `step_other(Neighborhood, threshold = 0.01)` to our recipe, the bottom 1% of the neighborhoods will be lumped into a new level called “other”. In this training set, this will catch 9 neighborhoods.
+For the Ames data, we can amend the recipe to use:
+```{r warning=FALSE}  
+simple_ames <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type,
+         data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_other(Neighborhood, threshold = 0.01) %>% 
+  step_dummy(all_nominal_predictors())
+```
+There are a few strategies for converting a factor predictor to a numeric format. The most common method is to create “dummy” or indicator variables. Let’s take the predictor in the Ames data for the building type, which is a factor variable with five levels. For dummy variables, the single `Bldg_Type` column would be replaced with four numeric columns whose values are either zero or one. These binary variables represent specific factor level values. In R, the convention is to *exclude* a column for the first factor level (`OneFam`, in this case). The `Bldg_Type` column would be replaced with a column called `TwoFmCon` that is one when the row has that value and zero otherwise. 
+
+More technically, the classical justification is that a number of models, including ordinary linear regression, have numerical issues when there are linear dependencies between columns. If all five building type indicator columns are included, they would add up to the intercept column (if there is one). This would cause an issue, or perhaps an outright error, in the underlying matrix algebra.
+The full set of encodings can be used for some models. This is traditionally called the “one-hot” encoding and can be achieved using the `one_hot` argument of `step_dummy()`.
+One helpful feature of `step_dummy()` is that there is more control over how the resulting dummy variables are named. In base R, dummy variable names mash the variable name with the level, resulting in names like `NeighborhoodVeenker`. Recipes, by default, use an underscore as the separator between the name and level (e.g., `Neighborhood_Veenker`) and there is an option to use custom formatting for the names. The default naming convention in recipes makes it easier to capture those new columns in future steps using a selector, such as `starts_with("Neighborhood_")`.
+Traditional dummy variables require that all of the possible categories be known to create a full set of numeric features. There are other methods for doing this transformation to a numeric format. *Feature hashing* methods only consider the value of the category to assign it to a predefined pool of dummy variables. This can be a good strategy when there are a large number of possible categories, but the statistical properties may not be optimal. For example, it may unnecessarily *alias* categories together (by assigning them to the same dummy variable). This reduces the specificity of the encoding and, if that dummy variable were important, it would be difficult to determine which of the categories is driving the effect.
+ 
+### Feature Extraction: an important step
+A common method for representing multiple features at once is called feature extraction. Most of these techniques create new features from the predictors that capture the information in the broader set as a whole. For example, principal component analysis (PCA) tries to extract as much of the original information in the predictor set as possible using a smaller number of features. PCA is a linear extraction method, meaning that each new feature is a linear combination of the original predictors. One nice aspect of PCA is that each of the new features, called the principal components or PCA scores, are uncorrelated with one another. Because of this, PCA can be very effective at reducing the correlation between predictors. Note that PCA is only aware of the predictors; the new PCA features might not be associated with the outcome.
+In the Ames data, there are several predictors that measure size of the property, such as the total basement size (`Total_Bsmt_SF`), size of the first floor (`First_Flr_SF`), the general living area (`Gr_Liv_Area`), and so on. PCA might be an option to represent these potentially redundant variables as a smaller feature set. Apart from the general living area, these predictors have the suffix `SF` in their names (for square feet) so a recipe step for PCA might look like:
+`  step_pca(matches("(SF$)|(Gr_Liv)"))`
+Note that all of these columns are measured in square feet. PCA assumes that all of the predictors are on the same scale. That’s true in this case, but often this step can be preceded by `step_normalize()`, which will center and scale each column.
+There are existing recipe steps for other extraction methods, such as: independent component analysis (ICA), non-negative matrix factorization (NNMF), multidimensional scaling (MDS), uniform manifold approximation and projection (UMAP), and others.
+ 
+ 
+The final recipe for the data becomes: 
+```{r warning=FALSE}  
+ames_rec <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+           Latitude + Longitude, data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_other(Neighborhood, threshold = 0.01) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_interact( ~ Gr_Liv_Area:starts_with("Bldg_Type_") ) %>% 
+  step_ns(Latitude, Longitude, deg_free = 20)
+```
+ 
+## 1.6 Fitting model with Parsnip
+ 
+The parsnip package provides a fluent and standardized interface for a variety of different models. In this chapter, we both give some motivation for why a common interface is beneficial and show how to use the package.
+ 
+* There are a variety of methods that can be used to estimate the model parameters:
++*Ordinary linear regression* uses the traditional method of least squares to solve for the model parameters.
++*Regularized linear regression* adds a penalty to the least squares method to encourage simplicity by removing predictors and/or shrinking their coefficients towards zero. This can be executed using Bayesian or non-Bayesian techniques.
+ 
+* For tidymodels, the approach to specifying a model is intended to be more unified:
++**Specify the type of model based on its mathematical structure** (e.g., linear regression, random forest, K-nearest neighbors, etc).
++**Specify the engine for fitting the model.** Most often this reflects the software package that should be used.
++**When required, declare the mode of the model.** The mode reflects the type of prediction outcome. For numeric outcomes, the mode is regression; for qualitative outcomes, it is classification10. If a model can only create one type of model, such as linear regression, the mode is already set.
+ 
+```{r warning=FALSE}  
+lm_model <- linear_reg() %>% set_engine("lm")
+```
+ 
+## 1.7 A model Workflow
+Previously, we discussed the recipes and parsnip packages. These packages can be used to prepare the data for analysis and fitting the model. Here, we introduce a new object called a model workflow. The purpose of this object is to encapsulate the major pieces of the modeling *process*. The workflow is important in two ways. First, using a workflow object encourages good methodology since it is a single point of entry to the estimation components of a data analysis. Second, it enables the user to better organize their projects. These two points are discussed in the following sections.
+For some data sets that are straightforward in nature, fitting the model itself may be the entire process. However, there are a variety of choices and additional steps that often occur before the model is fit:
+While our example model has p  predictors, it is common to start with more than p candidate predictors. Through exploratory data analysis or using domain knowledge, some of the predictors may be excluded from the analysis. In other cases, a feature selection algorithm may be used to make a data-driven choice for the minimum predictor set for the model.
+There are times when the value of an important predictor is missing. Rather than eliminating this sample from the data set, the missing value could be imputed using other values in the data. For example, if x1 were missing but was correlated with predictors x2 and x3, an imputation method could estimate the missing x1 observation from the values of x2 and x3
+.
+It may be beneficial to transform the scale of a predictor. If there is not a priori information on what the new scale should be, we can estimate the proper scale using a statistical transformation technique, the existing data, and some optimization criterion. Other transformations, such as PCA, take groups of predictors and transform them into new features that are used as the predictors.
+While the examples above are related to steps that occur before the model fit, there may also be operations that occur after the model is created. When a classification model is created where the outcome is binary (e.g., event and non-event), it is customary to use a 50% probability cutoff to create a discrete class prediction, also known as a “hard prediction”. For example, a classification model might estimate that the probability of an event was 62%. Using the typical default, the hard prediction would be event. However, the model may need to be more focused on reducing false positive results (i.e., where true non-events are classified as events). One way to do this is to raise the cutoff from 50% to some greater value. This increases the level of evidence required to call a new sample an event. While this reduces the true positive rate (which is bad), it may have a more dramatic effect on reducing false positives. The choice of the cutoff value should be optimized using data. This is an example of a post-processing step that has a significant effect on how well the model works, even though it is not contained in the model fitting step.
+It is important to focus on the broader modeling process, instead of only fitting the specific model used to estimate parameters. This broader process includes any preprocessing steps, the model fit itself, as well as potential post-processing activities. In this book, we will refer to this broader process as the model workflow and include in it any data-driven activities that are used to produce a final model equation.
+ 
+ 
+the modeling process encompasses more than just estimating the parameters of an algorithm that connects predictors to an outcome. This process also includes preprocessing steps, and operations taken after a model is fit. model workflow can capture the important components of the modeling process. Multiple workflows can also be created inside of a workflow set.
+```{r warning=FALSE}  
+lm_wflow <- 
+  workflow() %>% 
+  add_model(lm_model) %>% 
+  add_recipe(ames_rec)
+ 
+lm_fit <- fit(lm_wflow, ames_train)
+```
+ 
+ 
+ 
+## 1.8 Judging Model Effectiveness
+Once we have a model, we need to know how well it works. A quantitative approach for estimating effectiveness allows us to understand the model, to compare different models, or to tweak the model to improve performance. Our focus in tidymodels is on *empirical validation*; this usually means using data that were not used to create the model as the substrate to measure effectiveness.
+ 
+The effectiveness of any given model depends on how the model will be used. An inferential model is used primarily to understand relationships, and typically is discussed with a strong focus on the choice (and validity) of probabilistic distributions and other generative qualities that define the model. For a model used primarily for prediction, by contrast, predictive strength is primary and concerns about underlying statistical qualities may be less important. Predictive strength is usually focused on how close our predictions come to the observed data, i.e., fidelity of the model predictions to the actual results. This chapter focuses on functions that can be used to measure predictive strength. However, our advice for those developing inferential models is to use these techniques *even when the model will not be used with the primary goal of prediction.*
+* A superficial, but not uncommon, approach to this analysis would be to fit a large model with main effects and interactions, then use statistical tests to find the minimal set of model terms that are statistically significant at some pre-defined level. If a full model with the three factors and their two- and three-way interactions were used, an initial phase would be to test the interactions using sequential likelihood ratio tests.
++When comparing the model with all two-way interactions to one with the additional three-way interaction, the likelihood ratio tests produces a p-value of 0.888. This implies that there is no evidence that the 4 additional model terms associated with the three-way interaction explain enough of the variation in the data to keep them in the model.
++Next, the two-way interactions are similarly evaluated against the model with no interactions. The p-value here is 0.0382. This is somewhat borderline, but, given the small sample size, it would be prudent to conclude that there is evidence that some of the 10 possible two-way interactions are important to the model.
++From here, we would build some explanation of the results. The interactions would be particularly important to discuss since they may spark interesting physiological or neurological hypotheses to be explored further.
+While shallow, this analysis strategy is common in practice as well as in the literature. This is especially true if the practitioner has limited formal training in data analysis.
+ 
+## 1.8.1 Model tuning
+ 
+The number of nearest neighbors is a good example of a **tuning parameter** or **hyperparameter**: an unknown structural or other kind of value that has significant impact on the model but *cannot be directly estimated from the data.*
+ 
+* Tuning parameters or hyperparameters are often found in machine learning models:
++Boosting is an ensemble method that combines a series of base models, each of which is created sequentially and depends on the previous models. The number of boosting iterations is an important parameter that usually requires optimization.
++In the classic single-layer artificial neural network (a.k.a. the multilayer perceptron), the predictors are combined using two or more hidden units. The hidden units are linear combinations of the predictors that are captured in an activation function (typically a nonlinear function, such as a sigmoid). The hidden units are then connected to the outcome units; one outcome unit is used for regression models and multiple outcome units are required for classification. The number of hidden units and the type of activation function are important structural tuning parameters.
++Modern gradient descent methods are improved by finding the right optimization parameters. Examples are learning rates, momentum, and the number of optimization iterations/epochs. Neural networks and some ensemble models use gradient descent to estimate the model parameters. While the tuning parameters associated with gradient descent are not structural parameters, they often require tuning.
+* In some cases, preprocessing techniques require tuning:
++In principal component analysis, or its supervised cousin called partial least squares, the predictors are replaced with new, artificial features that have better properties related to collinearity. The number of extracted components can be tuned.
++Imputation methods estimate missing predictor values using the complete values of one or more predictors. One effective imputation tool uses K-nearest neighbors of the complete columns to predict the missing value. The number of neighbors modulates the amount of averaging and can be tuned.
+A counterexample where it is inappropriate to tune a parameter is the prior distribution required for Bayesian analysis. The prior encapsulates the analyst’s belief about the distribution of a quantity before evidence or data are taken into account. Our prior beliefs should not be subject to optimization. Tuning parameters are typically optimized for performance whereas the prior should not be tweaked to get “the right results.”
+ 
+## 1.8.2 Strategies for optimization
+ 
+* Tuning parameter optimization usually falls into one of two categories:
++pre-define a set of parameter values to evaluate or
++sequentially discover new parameter combinations based on previous results.
+The use of pre-defined sets is commonly called **grid search**. The main choices involved in grid search are how to make the grid and how many parameter combinations to evaluate. Grid search is often judged as inefficient since the number of grid points required to cover the parameter space can grow unmanageable with the curse of dimensionality. There is truth to this concern, but it is most true when the process is not optimized.
+For sequential or **iterative search** methods, almost any nonlinear optimization method is appropriate, although some are more efficient than others. In some cases, an initial set of results for one or more parameter combinations is required to start the optimization process. 
+ 
+## Grid Search
+ 
+There are two main types of grids. The first is a regular grid where each parameter has a corresponding set of possible values. A regular grid combines these factorially, i.e., by using all combinations of the sets. Alternatively, a non-regular grid is one where the parameter combinations are not formed from a small set of points.
+* Before considering each type, let’s consider an example model: the multilayer perceptron model (a.k.a. single layer artificial neural network). The parameters marked for tuning are:
++the number of hidden units,
++the number of fitting epochs/iterations in model training, and
++the amount of weight decay penalization.
+ 
+### REGULAR GRIDS
+Regular grids are combinations of separate sets of parameter values. First, the user creates a distinct set of values for each parameter. The number of possible values need not be the same for each parameter. The tidyr function `crossing()` is one way to create a regular grid.
+`crossing(
+  hidden_units = 1:3,
+  penalty = c(0.0, 0.1),
+  epochs = c(100, 200)
+)
+`
+The parameter object knows the ranges of the parameters. The dials package contains a set of `grid_*()` functions that take the parameter object as input to produce different types of grids.
+```{r warning=FALSE}  
+library(tidymodels)
+ 
+data(cells)
+cells <- cells %>% select(-case)
+ 
+set.seed(33)
+cell_folds <- vfold_cv(cells)
+ 
+roc_res <- metric_set(roc_auc)
+```
+ 
+## Iterative search
+grid search takes a pre-defined set of candidate values, evaluates them, then chooses the best settings. Iterative search methods pursue a different strategy. During the search process, they predict which values to test next.
+First, we discuss Bayesian optimization, which uses a statistical model to predict better parameter settings. After that, the chapter describes a global search method called simulated annealing.
+We use the same data on cell characteristics as the previous chapter for illustration, but change the model. This chapter uses a support vector machine model because it provides nice two-dimensional visualizations of the search processes.
+ 
+1. Bayesian optimization techniques analyze the current resampling results and create a predictive model to suggest tuning parameter values that have yet to be evaluated. The suggested parameter combination is then resampled. These results are then used in another predictive model that recommends more candidate values for testing, and so on. The process proceeds for a set number of iterations or until no further improvements occur. 
+When using Bayesian optimization, the primary concerns are how to create the model and how to select parameters recommended by that model. 
+2. Simulated annealing (SA) is a general nonlinear search routine inspired by the process in which metal cools. It is a global search method that can effectively navigate many different types of search landscapes, including discontinuous functions. Unlike most gradient-based optimization routines, simulated annealing can reassess previous solutions.
+
+ 
+ 
+ 
+
+ 
+ 
+ 
+ 
+
